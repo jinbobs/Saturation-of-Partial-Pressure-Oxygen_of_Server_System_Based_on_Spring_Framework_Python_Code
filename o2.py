@@ -1,11 +1,10 @@
 import serial
 import time
-import requests  # requests 라이브러리 추가
-import json
+import pymysql
+from datetime import datetime  # 날짜 모듈 추가
 
-# 시리얼 포트 설정 (윈도우에서는 COM 포트를 사용, 장치에 맞는 COM 포트를 설정)
-DEVICE = 'COM7'  
-BAUDRATE = 38400  
+DEVICE = 'COM7'
+BAUDRATE = 38400
 
 def open_serial():
     try:
@@ -23,24 +22,47 @@ def close_serial(ser):
         print(f"Serial port {DEVICE} closed")
 
 def conv_value(n):
-    # 값 변환 함수 (C 코드와 동일한 방식으로 변환)
     val = (n & 0xF0) >> 4
     val = val * 10 + (n & 0x0F)
     return val
 
 def read_data(ser):
-    # 시리얼 장치에서 데이터 읽기
     ser.flushInput()  # 버퍼 초기화
 
     while True:
-        # 데이터를 1바이트씩 읽고 0xFA로 시작하는지 확인
         byte = ser.read(1)
         if byte and byte[0] == 0xFA:
             break
 
-    # 시작 바이트 확인 후 나머지 데이터 읽기 (10바이트)
     data = ser.read(10)
     return data
+
+def save_to_database(avg_hr, avg_spo2, measurement_date):
+    # MySQL 데이터베이스에 연결 (필요에 맞게 데이터베이스 정보 수정)
+    connection = pymysql.connect(
+        host='localhost',           # 데이터베이스 호스트 (로컬일 경우 localhost)
+        user='root',       # MySQL 사용자 이름
+        password='1234',   # MySQL 사용자 비밀번호
+        database='choi',   # 데이터베이스 이름
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
+    try:
+        with connection.cursor() as cursor:
+            # SensorData 테이블에 데이터 삽입, 날짜 포함
+            sql = "INSERT INTO sensordata (hr, spo2, measurement_date) VALUES (%s, %s, %s)"
+            cursor.execute(sql, (avg_hr, avg_spo2, measurement_date))
+        
+        # 변경 사항 저장 (commit)
+        connection.commit()
+        print("Average values and date saved to the database successfully.")
+    
+    except Exception as e:
+        print(f"Error saving data to the database: {e}")
+    
+    finally:
+        connection.close()
 
 def main():
     ser = open_serial()
@@ -73,23 +95,11 @@ def main():
         avg_hr = sum(hr_values) / len(hr_values) if hr_values else 0
         avg_spo2 = sum(spo2_values) / len(spo2_values) if spo2_values else 0
 
-        # 평균 값 출력
-        print(f"{avg_hr}")  # 예: 86.8
-        print(f"{avg_spo2}")  # 예: 96.5
+        # 현재 날짜를 구해서 저장
+        measurement_date = datetime.now().date()
 
-        
-        # 평균값을 Spring Boot API로 전송
-        payload = {
-            "hr": avg_hr,
-            "spo2": avg_spo2
-        }
-        response = requests.post("http://localhost:8080/sensor-data", json=payload)
-
-        # 응답 확인
-        if response.status_code == 200:
-            print("Average values sent successfully.")
-        else:
-            print(f"Failed to send average values: {response.status_code}")
+        # 평균값과 날짜를 데이터베이스에 저장
+        save_to_database(avg_hr, avg_spo2, measurement_date)
 
     except KeyboardInterrupt:
         # 프로그램 종료 시 시리얼 포트 닫기
